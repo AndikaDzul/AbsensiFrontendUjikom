@@ -1,218 +1,102 @@
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import QRCode from 'qrcode'
 import { Html5Qrcode } from 'html5-qrcode'
+import QRCode from 'qrcode'
 import axios from 'axios'
 
 const router = useRouter()
 const backendUrl = 'https://backend-test-n4bo.vercel.app'
 
-/* ================= USER ================= */
-const user = ref({ name:'', role:'', mapel:'' })
-
-/* ================= DATA ================= */
+const user = ref({ name:'', role:'guru', mapel:'' })
 const students = ref([])
-const schedule = ref([])
+const attendanceHistory = ref(JSON.parse(localStorage.getItem('attendance_history')||'[]'))
 const searchQuery = ref('')
-const loadingStudents = ref(false)
-const loadingSchedule = ref(false)
-
-/* ================= QR SCAN ================= */
 const qrScannerVisible = ref(false)
-let html5QrCode = null
+let html5QrCode=null
 const scannedNis = ref(new Set())
 
-/* ================= AUDIO ================= */
-const successSound = new Audio('/sounds/success.mp3') // taruh di public/sounds/
+const toastVisible=ref(false)
+const toastMessage=ref('')
+const toastType=ref('success')
+const successSound=new Audio('/sounds/success.mp3')
 
-/* ================= QR MODAL ================= */
-const qrModalVisible = ref(false)
-const selectedQr = ref('')
+const showToast=(msg,type='success')=>{ toastMessage.value=msg; toastType.value=type; toastVisible.value=true; setTimeout(()=>toastVisible.value=false,3000) }
 
-/* ================= TOAST ================= */
-const toastVisible = ref(false)
-const toastMessage = ref('')
-const toastType = ref('success')
+const avatarInitial = computed(()=> user.value.name ? user.value.name.charAt(0).toUpperCase():'G')
+const filteredStudents = computed(()=> searchQuery.value ? students.value.filter(s=>s.name.toLowerCase().includes(searchQuery.value.toLowerCase())) : students.value)
+const hadirCount = computed(()=> students.value.filter(s=>s.status==='Hadir').length )
 
-const showToast = (msg, type = 'success') => {
-  toastMessage.value = msg
-  toastType.value = type
-  toastVisible.value = true
-  setTimeout(() => toastVisible.value = false, 3000)
-}
-
-/* ================= COMPUTED ================= */
-const avatarInitial = computed(() =>
-  user.value.name ? user.value.name.charAt(0).toUpperCase() : 'G'
-)
-
-const filteredStudents = computed(() => {
-  if (!searchQuery.value) return students.value
-  return students.value.filter(s =>
-    s.name.toLowerCase().includes(searchQuery.value.toLowerCase())
-  )
-})
-
-const hadirCount = computed(() =>
-  students.value.filter(s => s.status === 'Hadir').length
-)
-
-/* ================= LOAD DATA ================= */
 const loadStudents = async () => {
-  if (user.value.role !== 'guru') return
-  loadingStudents.value = true
-  try {
+  try{
     const res = await axios.get(`${backendUrl}/students`)
-    const cachedStudents = JSON.parse(localStorage.getItem('attendance_students')||'[]')
-
-    // Mapping data siswa + status dari localStorage jika ada
-    students.value = await Promise.all(
-      res.data.map(async s => {
-        const cached = cachedStudents.find(c=>c.nis===s.nis)
-        return {
-          ...s,
-          status: cached?.status || '',
-          qrCode: await QRCode.toDataURL(s.nis)
-        }
-      })
-    )
-
-    // Simpan ke localStorage
+    students.value = await Promise.all(res.data.map(async s=>({
+      ...s,
+      status: JSON.parse(localStorage.getItem('attendance_students')||'[]').find(c=>c.nis===s.nis)?.status||'',
+      qrCode: await QRCode.toDataURL(s.nis)
+    })))
     localStorage.setItem('attendance_students', JSON.stringify(students.value.map(s=>({nis:s.nis,status:s.status,name:s.name,class:s.class}))))
-  } finally {
-    loadingStudents.value = false
-  }
+  }catch{}
 }
 
-const loadSchedule = async () => {
-  loadingSchedule.value = true
-  try {
-    const res = await axios.get(`${backendUrl}/schedule`)
-    schedule.value = res.data
-  } finally {
-    loadingSchedule.value = false
-  }
-}
-
-/* ================= ATTENDANCE HISTORY ================= */
-const attendanceHistory = ref(JSON.parse(localStorage.getItem('attendance_history')||'[]'))
-
-const updateStatusWithHistory = async (nis, status) => {
+const updateStatusWithHistory = (nis,status) => {
   const student = students.value.find(s=>s.nis===nis)
   if(!student) return
-
   const time = new Date().toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit',second:'2-digit'})
-  student.status = status
-
-  // Tambahkan ke history
-  attendanceHistory.value.unshift({
-    nis: student.nis,
-    name: student.name,
-    status,
-    time
-  })
-
-  // Simpan ke localStorage
+  student.status=status
+  attendanceHistory.value.unshift({nis:student.nis,name:student.name,status,time})
   localStorage.setItem('attendance_history',JSON.stringify(attendanceHistory.value))
-  localStorage.setItem('attendance_students', JSON.stringify(students.value.map(s=>({nis:s.nis,status:s.status,name:s.name,class:s.class}))))
-
-  // Update server (jika backend tersedia)
-  try{ await axios.patch(`${backendUrl}/students/attendance/${nis}`,{status}) }catch{}
-
+  localStorage.setItem('attendance_students',JSON.stringify(students.value.map(s=>({nis:s.nis,status:s.status,name:s.name,class:s.class}))))
   showToast(`Status ${student.name} diubah ke ${status}`)
 }
 
-/* ================= RESET KEHADIRAN ================= */
-const resetAllAttendance = () => {
-  students.value.forEach(s=>s.status='')
-  attendanceHistory.value = []
-
-  localStorage.setItem('attendance_history', JSON.stringify(attendanceHistory.value))
-  localStorage.setItem('attendance_students', JSON.stringify(students.value.map(s=>({nis:s.nis,status:s.status,name:s.name,class:s.class}))))
-  showToast('✅ Semua kehadiran telah di-reset','success')
-}
-
-/* ================= QR SCAN ================= */
 const startQrScan = async () => {
-  qrScannerVisible.value = true
+  qrScannerVisible.value=true
   scannedNis.value.clear()
+  setTimeout(async()=>{
+    html5QrCode=new Html5Qrcode('qr-reader')
+    const cams=await Html5Qrcode.getCameras()
+    if(!cams.length) return
+    await html5QrCode.start(cams[cams.length-1].id,{fps:12,qrbox:320},decoded=>{
+      if(scannedNis.value.has(decoded)) return
+      const student=students.value.find(s=>s.nis===decoded)
+      if(!student){ showToast('❌ QR tidak valid','error'); return }
+      scannedNis.value.add(decoded)
+      updateStatusWithHistory(decoded,'Hadir')
+      successSound.currentTime=0; successSound.play()
+      if(navigator.vibrate) navigator.vibrate(200)
+    })
+  },300)
+}
+const stopQrScan = async () => { if(html5QrCode){ await html5QrCode.stop(); await html5QrCode.clear() } qrScannerVisible.value=false }
 
-  setTimeout(async () => {
-    html5QrCode = new Html5Qrcode('qr-reader')
-    const cams = await Html5Qrcode.getCameras()
-    if (!cams.length) return
-
-    await html5QrCode.start(
-      cams[cams.length - 1].id,
-      { fps: 12, qrbox: 320 },
-      decoded => {
-        if (scannedNis.value.has(decoded)) return
-
-        const student = students.value.find(s => s.nis === decoded)
-        if (!student) {
-          showToast('❌ QR tidak valid', 'error')
-          return
-        }
-
-        scannedNis.value.add(decoded)
-        updateStatusWithHistory(decoded, 'Hadir')
-
-        // 🔊 PLAY SOUND
-        successSound.currentTime = 0
-        successSound.play()
-
-        // 📳 GETAR
-        if (navigator.vibrate) navigator.vibrate(200)
-      }
-    )
-  }, 300)
+const resetAllAttendance = ()=>{
+  students.value.forEach(s=>s.status='')
+  attendanceHistory.value=[]
+  localStorage.setItem('attendance_students',JSON.stringify(students.value.map(s=>({nis:s.nis,status:s.status,name:s.name,class:s.class}))))
+  localStorage.setItem('attendance_history',JSON.stringify(attendanceHistory.value))
+  showToast('✅ Semua kehadiran di-reset','success')
 }
 
-const stopQrScan = async () => {
-  if (html5QrCode) {
-    await html5QrCode.stop()
-    await html5QrCode.clear()
-  }
-  qrScannerVisible.value = false
-}
-
-/* ================= QR MODAL ================= */
-const openQrModal = qr => {
-  selectedQr.value = qr
-  qrModalVisible.value = true
-}
-const closeQrModal = () => qrModalVisible.value = false
-
-const downloadQr = (dataUrl, name) => {
-  const a = document.createElement('a')
-  a.href = dataUrl
-  a.download = `${name}.png`
-  a.click()
-}
-
-/* ================= LOGOUT ================= */
-const logout = () => {
-  // Hanya hapus role, username, mapel tapi data tetap di localStorage
-  localStorage.removeItem('role')
-  localStorage.removeItem('teacherName')
-  localStorage.removeItem('teacherMapel')
-  router.push('/login')
-}
-
-/* ================= MOUNT ================= */
-onMounted(async () => {
-  // Jika login pertama kali
-  user.value.role = localStorage.getItem('role') || 'guru'
-  user.value.name = localStorage.getItem('teacherName') || 'Guru'
-  user.value.mapel = localStorage.getItem('teacherMapel') || 'RPL'
-
+onMounted(async()=>{
+  user.value.role=localStorage.getItem('role')||'guru'
+  user.value.name=localStorage.getItem('teacherName')||'Guru'
   await loadStudents()
-  await loadSchedule()
+
+  // WATCH LOCALSTORAGE supaya update realtime jika siswa scan QR
+  window.addEventListener('storage',()=>{
+    const data=JSON.parse(localStorage.getItem('attendance_students')||'[]')
+    students.value = students.value.map(s=>{
+      const found = data.find(d=>d.nis===s.nis)
+      return found ? {...s,status:found.status} : s
+    })
+    attendanceHistory.value=JSON.parse(localStorage.getItem('attendance_history')||'[]')
+  })
 })
 
 onUnmounted(stopQrScan)
 </script>
+
 
 <template>
 <div class="dashboard">
