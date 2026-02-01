@@ -1,106 +1,311 @@
 <script setup>
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { Html5Qrcode } from 'html5-qrcode'
 import QRCode from 'qrcode'
 import axios from 'axios'
+import * as faceapi from 'face-api.js'
 
 const router = useRouter()
 const backendUrl = 'https://backend-test-n4bo.vercel.app'
 
-const user = ref({ name:'', role:'guru', mapel:'' })
+/* ================= STATE ================= */
+const user = ref({ name: '', role: 'guru', mapel: '' })
 const students = ref([])
-const attendanceHistory = ref(JSON.parse(localStorage.getItem('attendance_history')||'[]'))
+const attendanceHistory = ref(JSON.parse(localStorage.getItem('attendance_history') || '[]'))
 const searchQuery = ref('')
 const qrScannerVisible = ref(false)
-let html5QrCode=null
+const cameraScannerVisible = ref(false)
+let html5QrCode = null
 const scannedNis = ref(new Set())
 
-const toastVisible=ref(false)
-const toastMessage=ref('')
-const toastType=ref('success')
-const successSound=new Audio('/sounds/success.mp3')
+/* ================= CAMERA STATE ================= */
+const capturedPhoto = ref(null)
+const cameraVideoRef = ref(null)
+let stream = null
+let faceRecognitionInterval = null
 
-const showToast=(msg,type='success')=>{ toastMessage.value=msg; toastType.value=type; toastVisible.value=true; setTimeout(()=>toastVisible.value=false,3000) }
+/* ================= TOAST ================= */
+const toastVisible = ref(false)
+const toastMessage = ref('')
+const toastType = ref('success')
+const successSound = new Audio('/sounds/success.mp3')
 
-const avatarInitial = computed(()=> user.value.name ? user.value.name.charAt(0).toUpperCase():'G')
-const filteredStudents = computed(()=> searchQuery.value ? students.value.filter(s=>s.name.toLowerCase().includes(searchQuery.value.toLowerCase())) : students.value)
-const hadirCount = computed(()=> students.value.filter(s=>s.status==='Hadir').length )
+const showToast = (msg, type = 'success') => {
+  toastMessage.value = msg
+  toastType.value = type
+  toastVisible.value = true
+  setTimeout(() => (toastVisible.value = false), 3000)
+}
 
+/* ================= COMPUTED ================= */
+const avatarInitial = computed(() =>
+  user.value.name ? user.value.name.charAt(0).toUpperCase() : 'G'
+)
+
+const filteredStudents = computed(() =>
+  searchQuery.value
+    ? students.value.filter(s =>
+        s.name.toLowerCase().includes(searchQuery.value.toLowerCase())
+      )
+    : students.value
+)
+
+const hadirCount = computed(
+  () => students.value.filter(s => s.status === 'Hadir').length
+)
+
+/* ================= LOAD STUDENTS ================= */
 const loadStudents = async () => {
-  try{
+  try {
     const res = await axios.get(`${backendUrl}/students`)
-    students.value = await Promise.all(res.data.map(async s=>({
-      ...s,
-      status: JSON.parse(localStorage.getItem('attendance_students')||'[]').find(c=>c.nis===s.nis)?.status||'',
-      qrCode: await QRCode.toDataURL(s.nis)
-    })))
-    localStorage.setItem('attendance_students', JSON.stringify(students.value.map(s=>({nis:s.nis,status:s.status,name:s.name,class:s.class}))))
-  }catch{}
+    const saved = JSON.parse(localStorage.getItem('attendance_students') || '[]')
+
+    students.value = await Promise.all(
+      res.data.map(async s => {
+        const found = saved.find(d => d.nis === s.nis)
+        return {
+          ...s,
+          status: found?.status || '',
+          photo: s.photo || '',
+          qrCode: await QRCode.toDataURL(s.nis),
+        }
+      })
+    )
+
+    localStorage.setItem(
+      'attendance_students',
+      JSON.stringify(
+        students.value.map(s => ({
+          nis: s.nis,
+          status: s.status,
+          name: s.name,
+          class: s.class,
+          photo: s.photo,
+        }))
+      )
+    )
+  } catch (e) {
+    console.error(e)
+  }
 }
 
-const updateStatusWithHistory = (nis,status) => {
-  const student = students.value.find(s=>s.nis===nis)
-  if(!student) return
-  const time = new Date().toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit',second:'2-digit'})
-  student.status=status
-  attendanceHistory.value.unshift({nis:student.nis,name:student.name,status,time})
-  localStorage.setItem('attendance_history',JSON.stringify(attendanceHistory.value))
-  localStorage.setItem('attendance_students',JSON.stringify(students.value.map(s=>({nis:s.nis,status:s.status,name:s.name,class:s.class}))))
-  showToast(`Status ${student.name} diubah ke ${status}`)
-}
+/* ================= UPDATE STATUS ================= */
+const updateStatusWithHistory = (nis, status, photo = '') => {
+  const student = students.value.find(s => s.nis === nis)
+  if (!student) return
 
-const startQrScan = async () => {
-  qrScannerVisible.value=true
-  scannedNis.value.clear()
-  setTimeout(async()=>{
-    html5QrCode=new Html5Qrcode('qr-reader')
-    const cams=await Html5Qrcode.getCameras()
-    if(!cams.length) return
-    await html5QrCode.start(cams[cams.length-1].id,{fps:12,qrbox:320},decoded=>{
-      if(scannedNis.value.has(decoded)) return
-      const student=students.value.find(s=>s.nis===decoded)
-      if(!student){ showToast('❌ QR tidak valid','error'); return }
-      scannedNis.value.add(decoded)
-      updateStatusWithHistory(decoded,'Hadir')
-      successSound.currentTime=0; successSound.play()
-      if(navigator.vibrate) navigator.vibrate(200)
-    })
-  },300)
-}
-const stopQrScan = async () => { if(html5QrCode){ await html5QrCode.stop(); await html5QrCode.clear() } qrScannerVisible.value=false }
-
-const resetAllAttendance = ()=>{
-  students.value.forEach(s=>s.status='')
-  attendanceHistory.value=[]
-  localStorage.setItem('attendance_students',JSON.stringify(students.value.map(s=>({nis:s.nis,status:s.status,name:s.name,class:s.class}))))
-  localStorage.setItem('attendance_history',JSON.stringify(attendanceHistory.value))
-  showToast('✅ Semua kehadiran di-reset','success')
-}
-
-onMounted(async()=>{
-  user.value.role=localStorage.getItem('role')||'guru'
-  user.value.name=localStorage.getItem('teacherName')||'Guru'
-  await loadStudents()
-
-  // WATCH LOCALSTORAGE supaya update realtime jika siswa scan QR
-  window.addEventListener('storage',()=>{
-    const data=JSON.parse(localStorage.getItem('attendance_students')||'[]')
-    students.value = students.value.map(s=>{
-      const found = data.find(d=>d.nis===s.nis)
-      return found ? {...s,status:found.status} : s
-    })
-    attendanceHistory.value=JSON.parse(localStorage.getItem('attendance_history')||'[]')
+  const time = new Date().toLocaleTimeString('id-ID', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
   })
+
+  student.status = status
+  if (photo) student.photo = photo
+
+  attendanceHistory.value.unshift({
+    nis,
+    name: student.name,
+    status,
+    photo: student.photo,
+    time,
+  })
+
+  localStorage.setItem(
+    'attendance_students',
+    JSON.stringify(
+      students.value.map(s => ({
+        nis: s.nis,
+        status: s.status,
+        name: s.name,
+        class: s.class,
+        photo: s.photo,
+      }))
+    )
+  )
+
+  localStorage.setItem('attendance_history', JSON.stringify(attendanceHistory.value))
+
+  showToast(`✅ Status ${student.name} → ${status}`)
+}
+
+/* ================= QR SCAN ================= */
+const startQrScan = async () => {
+  qrScannerVisible.value = true
+  scannedNis.value.clear()
+
+  setTimeout(async () => {
+    html5QrCode = new Html5Qrcode('qr-reader')
+    const cams = await Html5Qrcode.getCameras()
+    if (!cams.length) return
+
+    await html5QrCode.start(
+      cams[cams.length - 1].id,
+      { fps: 12, qrbox: 320 },
+      decoded => {
+        if (scannedNis.value.has(decoded)) return
+        const student = students.value.find(s => s.nis === decoded)
+        if (!student) {
+          showToast('❌ QR tidak valid', 'error')
+          return
+        }
+
+        scannedNis.value.add(decoded)
+        updateStatusWithHistory(decoded, 'Hadir')
+        successSound.currentTime = 0
+        successSound.play()
+        navigator.vibrate?.(200)
+      }
+    )
+  }, 300)
+}
+
+const stopQrScan = async () => {
+  if (html5QrCode) {
+    await html5QrCode.stop()
+    await html5QrCode.clear()
+    html5QrCode = null
+  }
+  qrScannerVisible.value = false
+}
+
+/* ================= CAMERA ABSEN ================= */
+const startCameraAbsen = async () => {
+  cameraScannerVisible.value = true
+  capturedPhoto.value = null
+
+  await nextTick()
+  const video = cameraVideoRef.value
+
+  // Load face-api models
+  await faceapi.nets.ssdMobilenetv1.loadFromUri('/models')
+  await faceapi.nets.faceRecognitionNet.loadFromUri('/models')
+  await faceapi.nets.faceLandmark68Net.loadFromUri('/models')
+
+  if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ video: true })
+      video.srcObject = stream
+      await video.play().catch(() => video.muted = true)
+
+      // Mulai loop face recognition real-time
+      startFaceRecognitionLoop(video)
+    } catch (err) {
+      showToast('❌ Tidak bisa akses kamera', 'error')
+      console.error(err)
+    }
+  } else {
+    showToast('❌ Browser tidak mendukung kamera', 'error')
+  }
+}
+
+const startFaceRecognitionLoop = async (video) => {
+  // Load deskriptor wajah siswa dari database
+  const labeledDescriptors = await Promise.all(
+    students.value
+      .filter(s => s.photo)
+      .map(async s => {
+        const img = await faceapi.fetchImage(`${backendUrl}/uploads/${s.photo}`)
+        const descriptor = await faceapi.computeFaceDescriptor(img)
+        return new faceapi.LabeledFaceDescriptors(s.nis, [descriptor])
+      })
+  )
+
+  const faceMatcher = new faceapi.FaceMatcher(labeledDescriptors, 0.6)
+
+  faceRecognitionInterval = setInterval(async () => {
+    const detections = await faceapi.detectAllFaces(video).withFaceLandmarks().withFaceDescriptors()
+    detections.forEach(det => {
+      const bestMatch = faceMatcher.findBestMatch(det.descriptor)
+      if (bestMatch.label !== 'unknown' && !scannedNis.value.has(bestMatch.label)) {
+        scannedNis.value.add(bestMatch.label)
+        updateStatusWithHistory(bestMatch.label, 'Hadir')
+        successSound.currentTime = 0
+        successSound.play()
+        navigator.vibrate?.(200)
+      }
+    })
+  }, 1000)
+}
+
+const capturePhoto = () => {
+  const video = cameraVideoRef.value
+  const canvas = document.createElement('canvas')
+  canvas.width = video.videoWidth
+  canvas.height = video.videoHeight
+  const ctx = canvas.getContext('2d')
+  ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+  capturedPhoto.value = canvas.toDataURL('image/jpeg')
+}
+
+const stopCameraAbsen = () => {
+  cameraScannerVisible.value = false
+  capturedPhoto.value = null
+  if (faceRecognitionInterval) {
+    clearInterval(faceRecognitionInterval)
+    faceRecognitionInterval = null
+  }
+  const video = cameraVideoRef.value
+  if (video && video.srcObject) {
+    const tracks = video.srcObject.getTracks()
+    tracks.forEach(t => t.stop())
+    video.srcObject = null
+  }
+  stream = null
+}
+
+/* ================= RESET ================= */
+const resetAllAttendance = () => {
+  students.value.forEach(s => (s.status = ''))
+  attendanceHistory.value = []
+
+  localStorage.setItem(
+    'attendance_students',
+    JSON.stringify(
+      students.value.map(s => ({
+        nis: s.nis,
+        status: '',
+        name: s.name,
+        class: s.class,
+        photo: s.photo,
+      }))
+    )
+  )
+
+  localStorage.setItem('attendance_history', '[]')
+  showToast('✅ Semua kehadiran di-reset')
+}
+
+/* ================= LOGOUT ================= */
+const logout = async () => {
+  await stopQrScan()
+  stopCameraAbsen()
+
+  localStorage.removeItem('role')
+  localStorage.removeItem('teacherName')
+
+  showToast('👋 Berhasil logout')
+  setTimeout(() => router.push('/login'), 500)
+}
+
+/* ================= MOUNT ================= */
+onMounted(async () => {
+  user.value.role = localStorage.getItem('role') || 'guru'
+  user.value.name = localStorage.getItem('teacherName') || 'Guru'
+
+  await loadStudents()
 })
 
-onUnmounted(stopQrScan)
+onUnmounted(() => {
+  stopQrScan()
+  stopCameraAbsen()
+})
 </script>
 
 
 <template>
 <div class="dashboard">
-
   <!-- HEADER -->
   <header class="header">
     <div class="left">
@@ -140,74 +345,68 @@ onUnmounted(stopQrScan)
       <div class="menu-icon scanner"><span class="material-icons">qr_code_scanner</span></div>
       <span>Scan QR Absen</span>
     </div>
+
+    <div class="menu-card" @click="startCameraAbsen">
+      <div class="menu-icon scanner"><span class="material-icons">camera_alt</span></div>
+      <span>Absen dengan Kamera</span>
+    </div>
   </section>
 
-  <!-- SISWA -->
-  <section class="activity" v-if="user.role==='guru'">
-    <input v-model="searchQuery" placeholder="Cari siswa..." class="search-input" />
-    <ul v-if="loadingStudents" class="empty">Memuat siswa...</ul>
-    <ul v-else>
-      <li v-for="s in filteredStudents" :key="s.nis" class="student-card">
+  <!-- CAMERA MODAL -->
+  <div v-if="cameraScannerVisible" class="modal-overlay">
+    <div class="modal-content">
+      <video ref="cameraVideoRef" width="320" height="240" autoplay muted></video>
+      <div class="camera-buttons" style="display:flex; gap:8px; margin-top:10px;">
+        <button @click="capturePhoto">📸 Ambil Foto</button>
+        <button v-if="capturedPhoto" @click="submitPhotoAbsen(prompt('Masukkan NIS siswa:'))">✅ Absen</button>
+        <button @click="stopCameraAbsen">❌ Tutup</button>
+      </div>
+      <img v-if="capturedPhoto" :src="capturedPhoto" style="margin-top:10px; width:160px; height:auto; border-radius:12px;" />
+    </div>
+  </div>
+
+  <!-- STUDENT LIST -->
+  <section class="students" style="margin-top:20px;">
+    <input class="search-input" v-model="searchQuery" placeholder="Cari siswa..." />
+    <div v-if="filteredStudents.length">
+      <div v-for="s in filteredStudents" :key="s.nis" class="student-card">
         <div class="student-left">
-          <div class="mini-avatar">{{ s.name.charAt(0).toUpperCase() }}</div>
+          <img v-if="s.photo" :src="`${backendUrl}/uploads/${s.photo}`" class="mini-avatar" />
           <div class="detail">
-            <strong>{{ s.name }}</strong>
-            <small>{{ s.class }} - NIS: {{ s.nis }}</small>
+            <strong>{{ s.name }} ({{ s.nis }})</strong>
+            <small>{{ s.class }}</small>
+            <small>Status: <span :class="'current-status ' + s.status.toLowerCase()">{{ s.status || '-' }}</span></small>
           </div>
-          <img v-if="s.qrCode" :src="s.qrCode" class="qr-code" @click="openQrModal(s.qrCode)" />
         </div>
-        <div class="status-buttons">
-          <button @click="updateStatusWithHistory(s.nis,'Hadir')" :class="{active:s.status==='Hadir', hadir:true}">🟢 Hadir</button>
-          <button @click="updateStatusWithHistory(s.nis,'Izin')" :class="{active:s.status==='Izin', izin:true}">🟡 Izin</button>
-          <button @click="updateStatusWithHistory(s.nis,'Sakit')" :class="{active:s.status==='Sakit', sakit:true}">🔵 Sakit</button>
-          <button @click="updateStatusWithHistory(s.nis,'Alfa')" :class="{active:s.status==='Alfa', alfa:true}">🔴 Alfa</button>
-        </div>
-        <span v-if="s.status" class="current-status">{{ s.status }}</span>
-      </li>
-    </ul>
-
-    <button @click="resetAllAttendance" class="reset-all-btn">♻ Reset Semua Kehadiran</button>
-
-    <div v-if="qrScannerVisible" id="qr-reader" class="qr-scanner"></div>
-
-    <!-- QR MODAL -->
-    <div v-if="qrModalVisible" class="modal-overlay">
-      <div class="modal-content">
-        <button @click="closeQrModal" class="close-btn">&times;</button>
-        <img :src="selectedQr" class="modal-qr" />
-        <button @click="downloadQr(selectedQr,'QR_Code')" class="download-btn">Download QR</button>
       </div>
     </div>
+    <div v-else class="empty">Belum ada siswa</div>
+  </section>
 
-    <!-- RIWAYAT ABSENSI -->
-    <section class="history">
-      <h3>🕒 Riwayat Absensi</h3>
-      <div v-if="attendanceHistory.length===0" class="empty">Belum ada riwayat absensi</div>
-      <div v-else>
-        <ul>
-          <li v-for="(h,i) in attendanceHistory" :key="i" class="history-item">
-            <strong>{{ h.name }}</strong>
-            <span>{{ h.status }}</span>
-            <small>{{ h.time }}</small>
-          </li>
-        </ul>
+  <!-- ATTENDANCE HISTORY -->
+  <section class="history">
+    <h3>Riwayat Absen</h3>
+    <div v-if="attendanceHistory.length">
+      <div v-for="h in attendanceHistory" :key="h.time" class="history-item">
+        <div>
+          <strong>{{ h.name }} ({{ h.nis }})</strong>
+          <small>Status: {{ h.status }}</small>
+        </div>
+        <div>{{ new Date(h.time).toLocaleTimeString('id-ID') }}</div>
       </div>
-    </section>
+    </div>
+    <div v-else class="empty">Belum ada riwayat absen</div>
+    <button class="reset-all-btn" @click="resetAllAttendance">Reset Semua Kehadiran</button>
   </section>
 
-  <!-- JADWAL -->
-  <section class="schedule">
-    <h3>Jadwal Pelajaran</h3>
-    <ul v-if="loadingSchedule" class="empty">Memuat jadwal...</ul>
-    <ul v-else>
-      <li v-for="sc in schedule" :key="sc._id" class="schedule-item">
-        <strong>{{ sc.mapel }}</strong> - {{ sc.hari }}, {{ sc.jam }}
-        <small>Guru: {{ sc.guru }}</small>
-      </li>
-    </ul>
-  </section>
+  <!-- TOAST -->
+  <div v-if="toastVisible" :class="['toast', toastType]" style="position:fixed; bottom:20px; left:50%; transform:translateX(-50%); background:#111827; color:white; padding:10px 16px; border-radius:12px;">
+    {{ toastMessage }}
+  </div>
+
 </div>
 </template>
+
 
 <style scoped>
 @import url('https://fonts.googleapis.com/icon?family=Material+Icons');

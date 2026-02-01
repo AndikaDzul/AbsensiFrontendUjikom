@@ -8,70 +8,61 @@ const router = useRouter()
 const backendUrl = 'https://backend-test-n4bo.vercel.app'
 
 const siswa = ref({ name:'', nis:'', kelas:'' })
-const attendanceHistory = ref([])
+const history = ref([])
 const totalHadir = ref(0)
-const loading = ref(false)
 const qrVisible = ref(false)
 let html5QrCode = null
 let scanning = false
 
 const toast = ref({ show:false, msg:'', type:'success' })
-const showToast = (msg, type='success') => {
-  toast.value = { show:true, msg, type }
+const showToast = (msg,type='success')=>{
+  toast.value={show:true,msg,type}
   setTimeout(()=>toast.value.show=false,3000)
 }
 
-const successSound = new Audio('/sounds/success.mp3')
-
-const formatTime = t =>
-  new Date(t).toLocaleString('id-ID',{dateStyle:'medium', timeStyle:'short'})
-
-const loadAttendance = async () => {
-  loading.value = true
-  try {
+const loadHistory = async ()=>{
+  try{
     const res = await axios.get(`${backendUrl}/attendance/history/${siswa.value.nis}`)
-    attendanceHistory.value = res.data || []
-    totalHadir.value = attendanceHistory.value.filter(a=>a.status==='Hadir').length
-  } catch {
-    attendanceHistory.value=[]
+    history.value = res.data
+    totalHadir.value = res.data.filter(h=>h.status==='Hadir').length
+  }catch{
+    history.value=[]
     totalHadir.value=0
-  } finally { loading.value=false }
+  }
 }
 
-const startScan = async () => {
-  qrVisible.value = true
+const startScan = async ()=>{
+  qrVisible.value=true
   scanning=false
+
   html5QrCode = new Html5Qrcode('qr-reader')
   const cams = await Html5Qrcode.getCameras()
-  if(!cams.length){ showToast('❌ Kamera tidak tersedia','error'); return }
+  if(!cams.length){
+    showToast('❌ Kamera tidak tersedia','error')
+    return
+  }
 
   await html5QrCode.start(
-    cams[cams.length-1].id,
-    { fps:12, qrbox:300 },
-    async decoded => {
+    cams[0].id,
+    { fps:10, qrbox:280 },
+    async decoded=>{
       if(scanning) return
       scanning=true
 
-      if(decoded.trim()!==siswa.value.nis.trim()){
+      if(decoded!==siswa.value.nis){
         showToast('❌ QR tidak valid','error')
         scanning=false
         return
       }
 
-      try {
-        await axios.patch(`${backendUrl}/attendance/scan/${decoded}`,{ nis:siswa.value.nis })
-        
-        // update localStorage agar guru bisa lihat
-        const data = JSON.parse(localStorage.getItem('attendance_students')||'[]')
-        const index = data.findIndex(s=>s.nis===decoded)
-        if(index>=0){ data[index].status='Hadir'; localStorage.setItem('attendance_students',JSON.stringify(data)) }
-
-        successSound.currentTime=0; successSound.play()
-        if(navigator.vibrate) navigator.vibrate(200)
+      try{
+        await axios.post(`${backendUrl}/attendance/scan`,{
+          nis: siswa.value.nis
+        })
         showToast('✅ Absensi berhasil')
-        await loadAttendance()
-      } catch{
-        showToast('❌ Absensi gagal','error')
+        await loadHistory()
+      }catch{
+        showToast('❌ Sudah absen / error','error')
       }
 
       stopScan()
@@ -79,25 +70,36 @@ const startScan = async () => {
   )
 }
 
-const stopScan = async () => {
-  if(html5QrCode){ await html5QrCode.stop(); await html5QrCode.clear() }
+const stopScan = async ()=>{
+  if(html5QrCode){
+    await html5QrCode.stop()
+    await html5QrCode.clear()
+    html5QrCode=null
+  }
   qrVisible.value=false
 }
 
-onMounted(async () => {
-  siswa.value.name = localStorage.getItem('studentName') || 'Siswa'
-  siswa.value.nis = localStorage.getItem('studentNis') || ''
-  siswa.value.kelas = localStorage.getItem('studentClass') || ''
+onMounted(async ()=>{
+  siswa.value.name = localStorage.getItem('studentName')
+  siswa.value.nis = localStorage.getItem('studentNis')
+  siswa.value.kelas = localStorage.getItem('studentClass')
 
-  if(!siswa.value.nis || localStorage.getItem('role')!=='siswa'){ router.push('/login'); return }
+  if(!siswa.value.nis || localStorage.getItem('role')!=='siswa'){
+    router.push('/login')
+    return
+  }
 
-  await loadAttendance()
+  await loadHistory()
 })
 
 onUnmounted(stopScan)
 
-const logout = () => { localStorage.clear(); router.push('/login') }
+const logout=()=>{
+  localStorage.clear()
+  router.push('/login')
+}
 </script>
+
 
 <template>
 <div class="dashboard-siswa">

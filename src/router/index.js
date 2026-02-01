@@ -1,14 +1,30 @@
 import { createRouter, createWebHistory } from 'vue-router'
 
+// Views
 import Login from '../views/Login.vue'
-import Dashboard from '../views/Dashboard.vue'
+import AdminDashboard from '../views/Admin.vue'
+import TeacherDashboard from '../views/Dashboard.vue'
 import StudentDashboard from '../views/StudentDashboard.vue'
 
 const routes = [
-  { path: '/', component: Login },
+  { path: '/', redirect: '/login' },
   { path: '/login', component: Login },
-  { path: '/dashboard', component: Dashboard, meta: { requiresAuth: true, role:'guru' } },
-  { path: '/student-dashboard', component: StudentDashboard, meta: { requiresAuth: true, role:'siswa' } },
+  { 
+    path: '/admin-dashboard', 
+    component: AdminDashboard, 
+    meta: { requiresAuth: true, role: 'admin' } 
+  },
+  { 
+    path: '/dashboard', 
+    component: TeacherDashboard, 
+    meta: { requiresAuth: true, role: 'guru' } 
+  },
+  { 
+    path: '/student-dashboard', 
+    component: StudentDashboard, 
+    meta: { requiresAuth: true, role: 'siswa' } 
+  },
+  { path: '/:pathMatch(.*)*', redirect: '/login' } // fallback
 ]
 
 const router = createRouter({
@@ -16,7 +32,7 @@ const router = createRouter({
   routes
 })
 
-// Guard
+// Router Guard
 router.beforeEach((to, from, next) => {
   const isLoggedIn = localStorage.getItem('isLoggedIn') === 'true'
   const role = localStorage.getItem('role')
