@@ -5,31 +5,27 @@ import { Html5Qrcode } from 'html5-qrcode'
 import axios from 'axios'
 
 const router = useRouter()
-const backendUrl = 'https://backend-deployys-tr57.vercel.app'
+const backendUrl = 'https://backend-deployys-bere9s.vercel.app'
 
-// ================= STATE SISWA & TEMA =================
-const student = ref({ name:'', nis:'', class:'', status:'', lastAttendance: null })
-const myAttendanceHistory = ref([]) 
+// ================= STATE SISWA =================
+const student = ref({ name:'', nis:'', class:'', status:'Belum Absen', lastAttendance: null })
+const studentsHadir = ref([]) 
 const qrVisible = ref(false)
 const scheduleVisible = ref(false)
-const isDarkMode = ref(localStorage.getItem('theme') === 'dark')
 let html5QrCode = null
 let scanning = false
 const guruTokenPrefix = 'ABSENSI-GURU-'
 const jadwalHariIni = ref([])
 
-// ================= TEMA LOGIC =================
-const toggleTheme = () => {
-  isDarkMode.value = !isDarkMode.value
-  localStorage.setItem('theme', isDarkMode.value ? 'dark' : 'light')
-}
-
 // ================= AUDIO, VIBRATE & TOAST =================
 const playSuccessFeedback = () => {
+  // 1. Suara
   const audio = new Audio('/sounds/succes.mp3')
-  audio.play().catch(e => console.log("Audio play blocked"))
-  if (navigator.vibrate) {
-    navigator.vibrate(200)
+  audio.play().catch(() => {})
+  
+  // 2. Getaran (Vibrate) - Pola: 200ms getar, 100ms diam, 200ms getar
+  if (window.navigator && window.navigator.vibrate) {
+    window.navigator.vibrate([200, 100, 200]);
   }
 }
 
@@ -39,37 +35,17 @@ const showToast = (msg,type='success')=>{
   setTimeout(()=>toast.value.show=false,3000)
 }
 
-// ================= LOGIKA STATUS (TIDAK BERUBAH) =================
+// ================= LOGIKA RESET 24 JAM =================
 const canAbsen = computed(() => {
   if (!student.value.lastAttendance) return true
   const lastTime = new Date(student.value.lastAttendance).getTime()
   const now = new Date().getTime()
-  const nineHalfHours = 9.5 * 60 * 60 * 1000
-  return (now - lastTime) > nineHalfHours
+  const twentyFourHours = 24 * 60 * 60 * 1000
+  return (now - lastTime) > twentyFourHours
 })
 
-const isLate = computed(() => {
-  const now = new Date()
-  return now.getHours() >= 15 
-})
-
-const displayStatus = computed(() => {
-  if (!canAbsen.value) return 'Sudah Hadir'
-  if (canAbsen.value && isLate.value) return 'Alfa'
-  return 'Belum Absen'
-})
-
+const displayStatus = computed(() => student.value.status)
 const hariIni = computed(()=> new Date().toLocaleDateString('id-ID', { weekday: 'long' }))
-
-const formatDateTime = (ts) => {
-  if(!ts) return { hari: '', jam: '' }
-  const d = new Date(ts)
-  if(isNaN(d.getTime())) return { hari: 'Format Salah', jam: '' }
-  return {
-    hari: d.toLocaleDateString('id-ID', { weekday: 'long', day: '2-digit', month: 'short' }),
-    jam: d.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })
-  }
-}
 
 // ================= DATA JADWAL =================
 const jadwalAll = {
@@ -85,7 +61,7 @@ const loadJadwalHariIni = ()=> { jadwalHariIni.value = jadwalAll[hariIni.value] 
 // ================= QR SCANNER =================
 const startScan = async()=>{
   if(!canAbsen.value){
-    showToast('Kamu sudah absen.','error')
+    showToast('Kamu sudah absen hari ini.','error')
     return
   }
   qrVisible.value = true
@@ -100,6 +76,7 @@ const startScan = async()=>{
           if(scanning) return
           if(!decodedText.startsWith(guruTokenPrefix)){
             showToast('QR Code Tidak Valid','error')
+            if (window.navigator.vibrate) window.navigator.vibrate(100);
             return
           }
           scanning = true
@@ -120,59 +97,67 @@ const stopScan = async()=>{
   qrVisible.value = false
 }
 
+// ================= LOGIC UPDATE DATABASE =================
 const submitAttendance = async(decodedText)=>{
   try{
     const now = new Date()
-    const payload = { status: 'Hadir', qrToken: decodedText, timestamp: now.toISOString() }
+    const payload = { 
+      status: 'Hadir',
+      qrToken: decodedText,
+      timestamp: now.toISOString()
+    }
+    
     await axios.patch(`${backendUrl}/students/attendance/${student.value.nis}`, payload)
+    
     student.value.status = 'Hadir'
     student.value.lastAttendance = now.toISOString()
-    playSuccessFeedback()
-    showToast('Berhasil Absen!')
+    
+    playSuccessFeedback() // SUARA + GETARAN
+    showToast('Berhasil Absen! Selamat belajar.')
+
     stopScan()
-    loadAttendance() 
+    loadAttendance()
   } catch(err){
     showToast(err.response?.data?.message || 'Gagal mengirim absensi','error')
     scanning = false
   }
 }
 
+// ================= LOAD DATA =================
 const loadAttendance = async ()=>{
   try{
     const res = await axios.get(`${backendUrl}/students`)
+    studentsHadir.value = res.data.filter(s => s.status === 'Hadir')
+
     const me = res.data.find(s => s.nis === student.value.nis)
-    if(me) {
-      student.value.status = me.status
-      if(me.attendanceHistory && me.attendanceHistory.length > 0) {
-        myAttendanceHistory.value = [...me.attendanceHistory].reverse()
-        student.value.lastAttendance = me.attendanceHistory[me.attendanceHistory.length - 1].timestamp || me.updatedAt
-      }
+    if(me && me.status==='Hadir') {
+      student.value.status = 'Hadir'
+      student.value.lastAttendance = me.attendanceHistory?.[me.attendanceHistory.length-1]?.timestamp || me.updatedAt
+    } else {
+      student.value.status = 'Belum Absen'
     }
   } catch(err){ console.log('Syncing...') }
 }
 
-// ================= FIXED LOGOUT =================
-const logout = async () => {
-  localStorage.clear() // Hapus semua session
-  await router.push('/login') // Pindah ke halaman login
-  window.location.reload() // Opsional: Memastikan state bersih total
+const logout = () => {
+  localStorage.clear()
+  router.replace('/login')
 }
 
 onMounted(()=>{
   const nis = localStorage.getItem('studentNis')
-  if(!nis){ 
-    router.replace('/login')
-    return 
-  }
+  if(!nis){ router.replace('/login'); return }
+  
   student.value = { 
     name: localStorage.getItem('studentName'), 
     nis, 
     class: localStorage.getItem('studentClass'), 
-    status:'',
+    status:'Belum Absen',
     lastAttendance: null
   }
   loadJadwalHariIni()
   loadAttendance()
+  
   const interval = setInterval(loadAttendance, 5000)
   onUnmounted(() => clearInterval(interval))
 })
@@ -181,250 +166,344 @@ onUnmounted(()=> stopScan())
 </script>
 
 <template>
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+  <div class="app-container">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css" rel="stylesheet">
 
-  <div class="mobile-app" :class="{ 'dark-mode': isDarkMode }">
-    <Transition name="slide-fade">
+    <transition name="toast-fade">
       <div v-if="toast.show" class="custom-toast" :class="toast.type">
-        <i :class="toast.type === 'success' ? 'fa-solid fa-circle-check' : 'fa-solid fa-circle-xmark'"></i>
+        <i :class="toast.type === 'success' ? 'bi bi-check-circle-fill' : 'bi bi-exclamation-triangle-fill'"></i>
         {{ toast.msg }}
       </div>
-    </Transition>
+    </transition>
 
-    <header class="app-header shadow-sm border-bottom px-4 py-3 d-flex justify-content-between align-items-center bg-card">
-      <div class="d-flex align-items-center gap-3">
-        <div class="avatar-circle">
-          {{ student.name?.[0] }}
-        </div>
-        <div>
-          <h1 class="h6 mb-0 fw-bold title-text">{{ student.name }}</h1>
-          <small class="text-secondary">{{ student.class }} • {{ student.nis }}</small>
-        </div>
-      </div>
-      <div class="d-flex gap-2">
-        <button @click="toggleTheme" class="btn btn-theme rounded-circle border-0">
-          <i :class="isDarkMode ? 'fa-solid fa-sun text-warning' : 'fa-solid fa-moon text-primary'"></i>
-        </button>
-        <button @click="logout" class="btn btn-outline-danger btn-sm rounded-pill px-3">
-          <i class="fa-solid fa-power-off me-1"></i> Keluar
-        </button>
-      </div>
-    </header>
-
-    <main class="container-fluid p-4">
-      <section class="status-card mb-4" :class="displayStatus === 'Sudah Hadir' ? 'is-hadir' : (displayStatus === 'Alfa' ? 'is-alfa' : 'is-none')">
-        <div class="card-body p-4 d-flex justify-content-between align-items-center text-white">
+    <nav class="navbar navbar-light bg-white sticky-top shadow-sm px-3 py-3">
+      <div class="container-fluid p-0">
+        <div class="d-flex align-items-center">
+          <div class="user-avatar-glow me-3">{{ student.name?.[0] }}</div>
           <div>
-            <span class="text-uppercase fw-semibold opacity-75 small ls-1">Status Kehadiran</span>
-            <h2 class="display-6 fw-bold my-1">{{ displayStatus }}</h2>
-            <p class="mb-0 small opacity-75">
-              <i class="fa-solid fa-calendar-day me-1"></i> {{ hariIni }}, {{ new Date().toLocaleDateString('id-ID') }}
-            </p>
+            <h6 class="mb-0 fw-bold text-dark">{{ student.name }}</h6>
+            <small class="text-muted">{{ student.class }} • {{ student.nis }}</small>
           </div>
-          <div class="icon-glow">
-            <i v-if="displayStatus === 'Sudah Hadir'" class="fa-solid fa-check-double fa-4x"></i>
-            <i v-else-if="displayStatus === 'Alfa'" class="fa-solid fa-circle-xmark fa-4x"></i>
-            <i v-else class="fa-solid fa-hourglass-start fa-4x opacity-50"></i>
+        </div>
+        <button @click="logout" class="btn btn-light btn-sm rounded-pill px-3 text-danger fw-bold">
+          <i class="bi bi-box-arrow-right me-1"></i> Keluar
+        </button>
+      </div>
+    </nav>
+
+    <main class="container px-4 mt-4">
+      <section class="status-card border-0 shadow-sm mb-4" :class="student.status === 'Hadir' ? 'status-active' : 'status-pending'">
+        <div class="card-body p-4 text-white">
+          <div class="d-flex justify-content-between">
+            <span class="opacity-75 small">Status Kehadiran Hari Ini</span>
+            <i class="bi bi-calendar3 opacity-75"></i>
+          </div>
+          <h2 class="display-6 fw-bold my-2">{{ displayStatus }}</h2>
+          <div class="d-flex align-items-center mt-3">
+            <div class="status-indicator me-2"></div>
+            <span class="small" v-if="student.status==='Hadir'">Presensi tercatat pada {{ new Date(student.lastAttendance).toLocaleTimeString() }}</span>
+            <span class="small" v-else>{{ hariIni }}, {{ new Date().toLocaleDateString('id-ID') }}</span>
           </div>
         </div>
       </section>
 
       <div class="row g-3 mb-4">
         <div class="col-6">
-          <button @click="startScan" class="btn w-100 action-card py-4" :disabled="!canAbsen" :class="{'disabled-btn': !canAbsen}">
-            <div class="icon-box scan mb-2">
-              <i class="fa-solid fa-camera-retro"></i>
-            </div>
-            <span class="fw-bold">Scan QR</span>
+          <button class="action-btn-main btn shadow-sm w-100 py-4" 
+                  @click="startScan" 
+                  :disabled="!canAbsen"
+                  :class="!canAbsen ? 'disabled-btn' : 'scan-btn-active'">
+            <i class="bi bi-qr-code-scan d-block mb-2"></i>
+            <span>Scan Absen</span>
           </button>
         </div>
         <div class="col-6">
-          <button @click="scheduleVisible = true" class="btn w-100 action-card py-4">
-            <div class="icon-box schedule mb-2">
-              <i class="fa-solid fa-clipboard-list"></i>
-            </div>
-            <span class="fw-bold">Jadwal</span>
+          <button class="action-btn-main btn btn-white border-0 shadow-sm w-100 py-4" @click="scheduleVisible = true">
+            <i class="bi bi-calendar-week d-block mb-2 text-primary"></i>
+            <span>Jadwal Mapel</span>
           </button>
         </div>
       </div>
 
-      <section class="history-section">
-        <div class="d-flex justify-content-between align-items-center mb-3">
-          <h3 class="h6 fw-bold mb-0 title-text"><i class="fa-solid fa-history me-2 text-primary"></i>Riwayat Saya</h3>
-          <span class="badge rounded-pill bg-primary bg-opacity-10 text-primary border border-primary border-opacity-25 px-3">{{ myAttendanceHistory.length }} Record</span>
-        </div>
-        
-        <div class="list-container">
-          <div v-for="(log, idx) in myAttendanceHistory" :key="idx" class="history-item d-flex align-items-center justify-content-between p-3 mb-2 rounded-4 border bg-card">
-            <div class="d-flex align-items-center gap-3">
-              <div class="check-box-ui">
-                <i class="fa-solid fa-check text-white"></i>
-              </div>
-              <div>
-                <span class="d-block fw-bold small title-text">{{ formatDateTime(log.timestamp).hari }}</span>
-                <small class="text-secondary">Telah diabsen</small>
-              </div>
-            </div>
-            <div class="badge bg-success-subtle text-success border border-success-subtle rounded-pill px-3">
-              {{ formatDateTime(log.timestamp).jam }}
-            </div>
-          </div>
+      <div class="section-title d-flex justify-content-between align-items-center mb-3">
+        <h6 class="fw-bold m-0"><i class="bi bi-people-fill me-2 text-primary"></i>Siswa Sudah Hadir</h6>
+        <span class="badge bg-primary-subtle text-primary rounded-pill px-3 py-2">{{ studentsHadir.length }} Orang</span>
+      </div>
 
-          <div v-if="myAttendanceHistory.length === 0" class="text-center py-5 opacity-50 text-secondary">
-            <i class="fa-solid fa-inbox fa-3x mb-3"></i>
-            <p>Belum ada data</p>
+      <div class="attendance-list shadow-sm bg-white rounded-4 overflow-hidden mb-5">
+        <div class="scroll-container py-2">
+          <div v-for="s in studentsHadir" :key="s.nis" class="student-row px-3 py-3 d-flex align-items-center justify-content-between">
+            <div class="d-flex align-items-center">
+              <div class="mini-avatar-list me-3">{{ s.name[0] }}</div>
+              <div>
+                <p class="mb-0 fw-bold small text-dark">{{ s.name }}</p>
+                <small class="text-muted smaller">{{ s.nis }} • {{ s.class }}</small>
+              </div>
+            </div>
+            <span class="status-badge"><i class="bi bi-patch-check-fill me-1"></i>Hadir</span>
+          </div>
+          <div v-if="studentsHadir.length === 0" class="text-center py-5">
+            <i class="bi bi-person-dash text-muted display-4 d-block mb-2"></i>
+            <p class="text-muted small">Belum ada siswa yang hadir</p>
           </div>
         </div>
-      </section>
+      </div>
     </main>
 
-    <Transition name="pop">
-      <div v-if="scheduleVisible" class="modal-overlay" @click.self="scheduleVisible = false">
-        <div class="bottom-sheet w-100 p-4 bg-card rounded-top-5 shadow-lg">
-          <div class="sheet-drag-handle mx-auto mb-4"></div>
+    <transition name="sheet">
+      <div v-if="scheduleVisible" class="sheet-overlay" @click.self="scheduleVisible=false">
+        <div class="sheet-content shadow-lg">
+          <div class="sheet-handle mb-4"></div>
           <div class="d-flex justify-content-between align-items-center mb-4">
-            <h5 class="fw-bold mb-0 title-text"><i class="fa-solid fa-calendar me-2 text-primary"></i>Jadwal Hari Ini</h5>
-            <button @click="scheduleVisible = false" class="btn-close"></button>
+            <h5 class="fw-bold text-dark m-0"><i class="bi bi-clock-history me-2 text-primary"></i>Jadwal {{ hariIni }}</h5>
+            <button @click="scheduleVisible=false" class="btn-close-custom"><i class="bi bi-x-lg"></i></button>
           </div>
-          <div class="schedule-list">
-            <div v-for="(j, i) in jadwalHariIni" :key="i" class="d-flex gap-3 mb-3 p-3 rounded-4 bg-light-custom">
-              <div class="fw-bold text-primary" style="min-width: 60px;">{{ j.jam }}</div>
-              <div class="border-start ps-3">
-                <div class="fw-bold title-text">{{ j.mapel }}</div>
-                <div class="small text-secondary">{{ j.guru }}</div>
+          
+          <div class="schedule-items overflow-auto" style="max-height: 60vh;">
+            <div v-for="(j,i) in jadwalHariIni" :key="i" class="schedule-card-item p-3 mb-3 d-flex align-items-center">
+              <div class="time-box me-3">{{ j.jam }}</div>
+              <div>
+                <strong class="d-block text-dark small">{{ j.mapel }}</strong>
+                <small class="text-muted smaller"><i class="bi bi-person me-1"></i>{{ j.guru }}</small>
               </div>
             </div>
           </div>
         </div>
       </div>
-    </Transition>
+    </transition>
 
-    <Transition name="fade">
-      <div v-if="qrVisible" class="scanner-full">
-        <div class="scanner-header p-4 d-flex justify-content-between text-white">
-          <button @click="stopScan" class="btn btn-link text-white text-decoration-none">
-            <i class="fa-solid fa-chevron-left me-2"></i> Kembali
+    <transition name="fade">
+      <div v-if="qrVisible" class="scanner-fullscreen">
+        <div class="scanner-nav p-3 d-flex justify-content-between align-items-center text-white">
+          <button @click="stopScan" class="btn btn-link text-white text-decoration-none fw-bold">
+            <i class="bi bi-chevron-left me-1"></i> Kembali
           </button>
-          <span class="fw-bold">Scan QR Code Guru</span>
-          <div style="width: 50px"></div>
+          <span class="fw-bold">Scan QR Kehadiran</span>
+          <div style="width: 70px"></div>
         </div>
-        <div class="scanner-view">
-          <div id="qr-reader"></div>
-          <div class="scanner-overlay-ui"></div>
+        
+        <div class="scanner-container">
+          <div id="qr-reader" class="qr-box shadow-lg"></div>
+          <div class="scan-overlay">
+            <div class="scan-frame"></div>
+          </div>
         </div>
-        <div class="scanner-footer text-center p-4 text-white">
-          <small class="opacity-75">Arahkan kamera tepat ke kode QR</small>
+        
+        <div class="scanner-footer p-4 text-center text-white opacity-75">
+          <i class="bi bi-lightning-charge-fill me-2 text-warning"></i>
+          Arahkan kamera ke QR Code yang diberikan Guru
         </div>
       </div>
-    </Transition>
+    </transition>
   </div>
 </template>
 
 <style scoped>
-/* CSS VARIABLES */
-.mobile-app {
-  --bg-main: #f8fafc;
-  --bg-card: #ffffff;
-  --text-bold: #0f172a;
-  --text-muted: #64748b;
-  --primary: #4f46e5;
-  --light-gray: #f1f5f9;
-  
-  font-family: 'Inter', sans-serif;
-  background-color: var(--bg-main);
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700&display=swap');
+
+.app-container {
+  font-family: 'Plus Jakarta Sans', sans-serif;
+  background-color: #fcfdfe;
   min-height: 100vh;
   max-width: 480px;
   margin: 0 auto;
-  color: var(--text-bold);
-  transition: all 0.3s ease;
+  color: #2D3748;
 }
 
-.dark-mode {
-  --bg-main: #020617;
-  --bg-card: #1e293b;
-  --text-bold: #f8fafc;
-  --text-muted: #94a3b8;
-  --light-gray: #334155;
+/* UI Elements */
+.user-avatar-glow {
+  width: 42px;
+  height: 42px;
+  background: linear-gradient(135deg, #4299e1 0%, #3182ce 100%);
+  color: white;
+  border-radius: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  box-shadow: 0 4px 12px rgba(66, 153, 225, 0.3);
 }
 
-.bg-card { background-color: var(--bg-card) !important; }
-.title-text { color: var(--text-bold) !important; }
-.bg-light-custom { background-color: var(--light-gray); }
-
-/* UI COMPONENTS */
-.avatar-circle {
-  width: 45px; height: 45px;
-  background: linear-gradient(135deg, #6366f1, #4f46e5);
-  color: white; border-radius: 12px;
-  display: flex; align-items: center; justify-content: center;
-  font-weight: bold; font-size: 1.2rem;
-}
-
-.btn-theme {
-  background: var(--light-gray);
-  width: 40px; height: 40px;
-}
-
-.custom-toast {
-  position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
-  z-index: 9999; padding: 12px 25px; border-radius: 50px;
-  color: white; display: flex; align-items: center; gap: 10px;
-  box-shadow: 0 10px 25px rgba(0,0,0,0.2);
-}
-.custom-toast.success { background: #10b981; }
-.custom-toast.error { background: #ef4444; }
-
-/* STATUS CARD */
 .status-card {
-  border: none; border-radius: 30px;
-  box-shadow: 0 15px 35px -5px rgba(0,0,0,0.1);
-}
-.status-card.is-hadir { background: linear-gradient(135deg, #10b981, #059669); }
-.status-card.is-alfa { background: linear-gradient(135deg, #f43f5e, #e11d48); }
-.status-card.is-none { background: linear-gradient(135deg, #64748b, #475569); }
-
-.icon-glow { filter: drop-shadow(0 0 10px rgba(255,255,255,0.3)); }
-
-/* ACTION CARD */
-.action-card {
-  background: var(--bg-card); border: none; border-radius: 25px;
-  color: var(--text-bold); box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05);
-  transition: transform 0.2s;
-}
-.action-card:active { transform: scale(0.95); }
-.disabled-btn { opacity: 0.5; filter: grayscale(1); }
-
-.icon-box {
-  width: 55px; height: 55px; border-radius: 18px; margin: 0 auto;
-  display: flex; align-items: center; justify-content: center; font-size: 1.5rem;
-}
-.scan { background: #e0e7ff; color: #4338ca; }
-.schedule { background: #fef3c7; color: #d97706; }
-
-/* HISTORY */
-.check-box-ui {
-  width: 35px; height: 35px; border-radius: 10px;
-  background: #10b981; display: flex; align-items: center; justify-content: center;
+  border-radius: 28px;
+  transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
 }
 
-/* MODAL & SCANNER */
-.modal-overlay {
-  position: fixed; inset: 0; background: rgba(0,0,0,0.6);
-  backdrop-filter: blur(5px); z-index: 2000; display: flex; align-items: flex-end;
+.status-pending { background: linear-gradient(135deg, #718096 0%, #4a5568 100%); }
+.status-active { 
+  background: linear-gradient(135deg, #48bb78 0%, #2f855a 100%); 
+  box-shadow: 0 10px 20px rgba(72, 187, 120, 0.2) !important;
 }
-.sheet-drag-handle { width: 50px; height: 6px; background: #cbd5e1; border-radius: 10px; }
 
-.scanner-full {
-  position: fixed; inset: 0; background: #000; z-index: 3000;
+.status-indicator {
+  width: 8px;
+  height: 8px;
+  background-color: #fff;
+  border-radius: 50%;
+  box-shadow: 0 0 8px #fff;
 }
-#qr-reader { width: 100% !important; border: none !important; }
 
-/* ANIMATIONS */
-.slide-fade-enter-active { transition: all 0.3s ease-out; }
-.slide-fade-enter-from { transform: translate(-50%, -20px); opacity: 0; }
-.pop-enter-active { transition: transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
-.pop-enter-from { transform: translateY(100%); }
+.action-btn-main {
+  border-radius: 24px;
+  background: white;
+  transition: all 0.2s;
+}
 
-.ls-1 { letter-spacing: 1px; }
+.action-btn-main i { font-size: 1.8rem; }
+.action-btn-main:active { transform: scale(0.95); }
+
+.scan-btn-active {
+  border: 1px solid #ebf4ff;
+  color: #3182ce;
+}
+
+.disabled-btn {
+  background: #edf2f7 !important;
+  color: #a0aec0 !important;
+  border: none !important;
+}
+
+/* List UI */
+.mini-avatar-list {
+  width: 38px;
+  height: 38px;
+  background: #ebf8ff;
+  color: #3182ce;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 0.9rem;
+}
+
+.student-row { border-bottom: 1px solid #f7fafc; }
+.status-badge {
+  font-size: 0.65rem;
+  font-weight: 800;
+  color: #38a169;
+  background: #f0fff4;
+  padding: 5px 12px;
+  border-radius: 10px;
+  text-transform: uppercase;
+}
+
+/* Bottom Sheet */
+.sheet-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.5);
+  backdrop-filter: blur(2px);
+  z-index: 1050;
+  display: flex;
+  align-items: flex-end;
+}
+
+.sheet-content {
+  background: white;
+  width: 100%;
+  border-radius: 32px 32px 0 0;
+  padding: 24px;
+  animation: slideUp 0.4s ease-out;
+}
+
+.sheet-handle {
+  width: 45px;
+  height: 5px;
+  background: #e2e8f0;
+  border-radius: 10px;
+  margin: 0 auto;
+}
+
+.schedule-card-item {
+  background: #f8fafc;
+  border-radius: 18px;
+}
+
+.time-box {
+  background: #3182ce;
+  color: white;
+  padding: 6px 12px;
+  border-radius: 12px;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+/* Toast */
+.custom-toast {
+  position: fixed;
+  top: 25px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9999;
+  padding: 14px 24px;
+  border-radius: 20px;
+  color: white;
+  font-weight: 600;
+  box-shadow: 0 10px 25px rgba(0,0,0,0.15);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 280px;
+}
+.toast.success { background: #2f855a; }
+.toast.error { background: #e53e3e; }
+
+/* Scanner */
+.scanner-fullscreen {
+  position: fixed;
+  inset: 0;
+  background: #000;
+  z-index: 2000;
+  display: flex;
+  flex-direction: column;
+}
+
+.scanner-container {
+  flex: 1;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.scan-frame {
+  width: 260px;
+  height: 260px;
+  border: 3px solid #4299e1;
+  border-radius: 30px;
+  position: relative;
+  box-shadow: 0 0 0 1000px rgba(0,0,0,0.6);
+}
+
+.scan-frame::after {
+  content: "";
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 3px;
+  background: #4299e1;
+  box-shadow: 0 0 15px #4299e1;
+  animation: scanAnim 2s infinite linear;
+}
+
+@keyframes scanAnim {
+  0% { top: 0; }
+  100% { top: 100%; }
+}
+
+@keyframes slideUp {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+
+.smaller { font-size: 0.75rem; }
+.btn-close-custom {
+  background: #f7fafc;
+  border: none;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  color: #a0aec0;
+}
 </style>

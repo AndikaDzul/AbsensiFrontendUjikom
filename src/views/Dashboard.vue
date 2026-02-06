@@ -5,7 +5,7 @@ import QRCode from 'qrcode'
 import axios from 'axios'
 
 const router = useRouter()
-const backendUrl = 'https://backend-deployys-tr57.vercel.app'
+const backendUrl = 'https://backend-deployys-bere9s.vercel.app'
 
 // ================= STATE =================
 const user = ref({ name:'', role:'guru', mapel:'' })
@@ -50,11 +50,12 @@ const filteredStudents = computed(() => {
   } else if (activeTab.value === 'belum') {
     list = list.filter(s => !s.status || s.status === '')
   }
+
   if (searchQuery.value) {
     const q = searchQuery.value.toLowerCase()
     list = list.filter(s => 
       s.name.toLowerCase().includes(q) || 
-      String(s.nis).includes(q)
+      s.nis.includes(q)
     )
   }
   return list
@@ -64,7 +65,7 @@ const hadirCount = computed(() =>
   students.value.filter(s => s.status === 'Hadir').length
 )
 
-// ================= ACTIONS =================
+// ================= LOGIC =================
 const loadStudents = async () => {
   try {
     const res = await axios.get(`${backendUrl}/students`)
@@ -77,48 +78,28 @@ const loadStudents = async () => {
 const resetAllAttendance = async () => {
   if(!confirm('Bersihkan semua data kehadiran hari ini?')) return
   try {
-    // Note: Sebaiknya backend menyediakan endpoint bulk reset untuk efisiensi
     for (const s of students.value) {
       await axios.patch(`${backendUrl}/students/attendance/${s.nis}`, {
         status: '',
         method: 'system'
       })
       s.status = ''
-      s.history = []
     }
-    showToast('♻ Database kehadiran telah direset')
+    showToast('Database kehadiran telah direset')
     loadStudents()
   } catch (e) {
     showToast('Gagal mereset data', 'error')
   }
 }
 
-// ===== FIX LOGOUT FUNCTION =====
 const logout = () => {
-  // 1. Hapus semua data sesi
-  localStorage.removeItem('teacherName')
-  localStorage.removeItem('token') // Jika ada token
-  localStorage.removeItem('role')
-  
-  // Jangan hapus darkMode agar preferensi user tetap ada, 
-  // tapi jika ingin bersih total gunakan localStorage.clear()
-  
-  // 2. Redirect ke halaman login
-  // Gunakan push agar user bisa kembali jika tidak sengaja, 
-  // atau replace jika ingin menghapus history login
-  router.push('/login').then(() => {
-    // Opsi tambahan: refresh halaman untuk memastikan state bersih
-    window.location.reload()
-  })
+  localStorage.clear()
+  router.replace('/login')
 }
 
 const generateQr = async () => {
   const qrData = `${guruToken}-${Date.now()}`
-  try {
-    guruQr.value = await QRCode.toDataURL(qrData)
-  } catch (err) {
-    console.error(err)
-  }
+  guruQr.value = await QRCode.toDataURL(qrData)
 }
 
 const toggleHistory = (nis) => {
@@ -138,284 +119,304 @@ onUnmounted(() => {
 </script>
 
 <template>
+<div :class="['app-container', darkMode ? 'dark-theme' : 'light-theme']">
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css" rel="stylesheet">
 
-  <div class="app-container" :class="darkMode ? 'dark-mode' : 'light-mode'">
+  <Transition name="toast">
+    <div v-if="toastVisible" class="custom-toast" :class="toastType">
+      <i :class="toastType === 'success' ? 'bi bi-check-circle-fill' : 'bi bi-exclamation-triangle-fill'"></i>
+      {{ toastMessage }}
+    </div>
+  </Transition>
 
-    <Transition name="slide-fade">
-      <div v-if="toastVisible" class="custom-toast" :class="toastType">
-        <i :class="toastType === 'success' ? 'fa-solid fa-circle-check' : 'fa-solid fa-circle-xmark'"></i>
-        {{ toastMessage }}
-      </div>
-    </Transition>
-
-    <nav class="app-header shadow-sm border-bottom px-4 py-3 d-flex justify-content-between align-items-center">
+  <nav class="teacher-nav px-3">
+    <div class="nav-content-web">
       <div class="d-flex align-items-center gap-3">
-        <div class="avatar-circle">
-          {{ avatarInitial }}
-        </div>
-        <div>
-          <span class="d-block small text-secondary">Selamat Mengajar,</span>
-          <h1 class="h6 mb-0 fw-bold title-text">{{ user.name }}</h1>
+        <div class="teacher-avatar shadow-sm">{{ avatarInitial }}</div>
+        <div class="teacher-meta">
+          <small class="text-muted d-block" style="font-size: 0.7rem;">Panel Pengajar</small>
+          <span class="fw-bold">{{ user.name }}</span>
         </div>
       </div>
       <div class="d-flex gap-2">
-        <button @click="toggleDarkMode" class="btn btn-theme rounded-circle border-0">
-          <i :class="darkMode ? 'fa-solid fa-sun text-warning' : 'fa-solid fa-moon text-primary'"></i>
+        <button @click="toggleDarkMode" class="icon-btn">
+          <i :class="darkMode ? 'bi bi-sun-fill' : 'bi bi-moon-stars-fill'"></i>
         </button>
-        <button @click="logout" class="btn btn-outline-danger btn-sm rounded-pill px-3">
-          <i class="fa-solid fa-power-off me-1"></i> Keluar
+        <button @click="logout" class="icon-btn text-danger">
+          <i class="bi bi-power"></i>
         </button>
       </div>
-    </nav>
+    </div>
+  </nav>
 
-    <main class="container-fluid p-4">
-      <section class="hero-card mb-4">
-        <div class="card-body p-4 text-white">
-          <div class="d-flex justify-content-between align-items-center mb-3">
-            <div>
-              <span class="text-uppercase fw-semibold opacity-75 small">Laporan Kehadiran</span>
-              <h2 class="display-6 fw-bold my-1">{{ hadirCount }} <span class="h4 opacity-75">/ {{ students.length }}</span></h2>
-              <p class="mb-0 small opacity-75">Siswa hadir hari ini</p>
-            </div>
-            <div class="icon-glow">
-              <i class="fa-solid fa-chart-line fa-3x"></i>
-            </div>
-          </div>
-          <div class="progress bg-white bg-opacity-20" style="height: 6px; border-radius: 10px;">
-            <div class="progress-bar bg-white" :style="{ width: (students.length > 0 ? (hadirCount/students.length * 100) : 0) + '%' }"></div>
+  <main class="container py-4" style="max-width: 600px;">
+    <section class="dashboard-hero mb-4 shadow-sm">
+      <div class="row align-items-center g-0">
+        <div class="col-7 p-4">
+          <h4 class="fw-bold mb-1 text-white">Monitoring</h4>
+          <p class="text-white-50 small mb-0">Kehadiran Siswa Real-time</p>
+        </div>
+        <div class="col-5 p-3">
+          <div class="stat-card-inner">
+            <span class="d-block small text-white-50">HADIR</span>
+            <h2 class="fw-black m-0 text-white">{{ hadirCount }}<small class="fs-6 opacity-50">/{{ students.length }}</small></h2>
           </div>
         </div>
-      </section>
+      </div>
+    </section>
 
-      <section class="mb-4">
-        <button @click="showQrModal=true" class="btn w-100 action-card p-3 d-flex align-items-center gap-3 border shadow-sm">
-          <div class="icon-box-qr">
-            <i class="fa-solid fa-qrcode fa-xl text-primary"></i>
-          </div>
-          <div class="text-start">
-            <strong class="d-block title-text">Buka QR Absensi</strong>
-            <small class="text-secondary">Klik untuk discan oleh siswa</small>
-          </div>
-          <i class="fa-solid fa-chevron-right ms-auto opacity-25"></i>
-        </button>
-      </section>
+    <button @click="showQrModal=true" class="qr-trigger-card mb-4 border-0 shadow-sm w-100 p-3">
+      <div class="d-flex align-items-center gap-3">
+        <div class="qr-icon-box">
+          <i class="bi bi-qr-code text-primary fs-3"></i>
+        </div>
+        <div class="text-start flex-grow-1">
+          <h6 class="fw-bold mb-0">Tampilkan QR Absensi</h6>
+          <small class="text-muted">Siswa melakukan scan melalui ponsel</small>
+        </div>
+        <i class="bi bi-chevron-right text-muted"></i>
+      </div>
+    </button>
 
-      <section class="student-list-section">
-        <div class="tab-switcher p-1 mb-3">
+    <section class="list-section bg-white rounded-4 shadow-sm overflow-hidden mb-4">
+      <div class="p-3 border-bottom">
+        <div class="tab-pill-container mb-3">
           <button @click="activeTab = 'hadir'" :class="{ active: activeTab === 'hadir' }">Hadir</button>
           <button @click="activeTab = 'belum'" :class="{ active: activeTab === 'belum' }">Belum</button>
           <button @click="activeTab = 'semua'" :class="{ active: activeTab === 'semua' }">Semua</button>
         </div>
-
-        <div class="search-box-wrapper mb-4">
-          <i class="fa-solid fa-magnifying-glass search-icon"></i>
-          <input v-model="searchQuery" class="form-control border-0 shadow-sm ps-5 py-2" placeholder="Cari nama atau NIS..." />
-        </div>
-
-        <div class="list-container">
-          <TransitionGroup name="list">
-            <div v-for="s in filteredStudents" :key="s.nis" class="student-card-item bg-card mb-3 p-3 rounded-4 border shadow-sm">
-              <div class="d-flex align-items-center justify-content-between">
-                <div class="d-flex align-items-center gap-3">
-                  <div class="s-avatar-box">
-                    {{ s.name.charAt(0) }}
-                  </div>
-                  <div>
-                    <h4 class="h6 mb-0 fw-bold title-text">{{ s.name }}</h4>
-                    <p class="mb-0 small text-secondary">{{ s.class || 'XII RPL' }} • {{ s.nis }}</p>
-                  </div>
-                </div>
-                <span :class="['badge-ui', s.status || 'None']">{{ s.status || 'Belum' }}</span>
-              </div>
-              
-              <div class="mt-3 pt-2 border-top d-flex justify-content-between align-items-center">
-                <button @click="toggleHistory(s.nis)" class="btn btn-link p-0 text-decoration-none small fw-bold">
-                  <i class="fa-solid fa-clock-rotate-left me-1"></i> 
-                  {{ showHistoryFor === s.nis ? 'Tutup Detail' : 'Riwayat Absen' }}
-                </button>
-              </div>
-
-              <Transition name="expand">
-                <div v-if="showHistoryFor === s.nis" class="history-content mt-3 p-3 rounded-3">
-                  <div v-if="s.history && s.history.length > 0">
-                    <div v-for="(h, i) in s.history" :key="i" class="time-node d-flex justify-content-between small mb-1">
-                      <span><i class="fa-solid fa-circle-check text-success me-2"></i>{{ h.status }}</span>
-                      <span class="text-secondary">{{ new Date(h.date).toLocaleTimeString('id-ID', {hour:'2-digit', minute:'2-digit'}) }}</span>
-                    </div>
-                  </div>
-                  <div v-else class="text-center small text-secondary py-2">Belum ada riwayat tercatat</div>
-                </div>
-              </Transition>
-            </div>
-          </TransitionGroup>
-
-          <div v-if="filteredStudents.length === 0" class="text-center py-5 opacity-50">
-            <i class="fa-solid fa-folder-open fa-3x mb-3"></i>
-            <p>Data tidak ditemukan</p>
-          </div>
-        </div>
-
-        <button @click="resetAllAttendance" class="btn btn-reset-custom w-100 mt-4 rounded-4 py-3">
-          <i class="fa-solid fa-trash-can me-2"></i> Reset Kehadiran Hari Ini
-        </button>
-      </section>
-    </main>
-
-    <Transition name="pop">
-      <div v-if="showQrModal" class="modal-overlay" @click.self="showQrModal=false">
-        <div class="bottom-sheet bg-card rounded-top-5 p-4 w-100 shadow-lg text-center">
-          <div class="drag-handle mx-auto mb-4"></div>
-          <h5 class="fw-bold title-text mb-1">QR Code Absensi</h5>
-          <p class="small text-secondary mb-4">Siswa silakan scan untuk mencatat kehadiran</p>
-          
-          <div class="qr-wrapper-box mx-auto p-3 bg-white shadow-sm mb-4">
-            <img :src="guruQr" class="img-fluid" alt="QR" />
-            <div class="qr-progress-bar mt-3">
-              <div class="qr-progress-fill"></div>
-            </div>
-          </div>
-
-          <p class="small text-muted"><i class="fa-solid fa-sync fa-spin me-2"></i> Diupdate otomatis (20 detik)</p>
-          <button @click="showQrModal=false" class="btn btn-primary w-100 rounded-pill py-2 mt-2">Tutup</button>
+        <div class="search-input-group">
+          <i class="bi bi-search"></i>
+          <input v-model="searchQuery" placeholder="Cari nama atau NIS..." />
         </div>
       </div>
-    </Transition>
-  </div>
+
+      <div class="list-body">
+        <TransitionGroup name="stagger">
+          <div v-for="s in filteredStudents" :key="s.nis" class="student-item-row p-3">
+            <div class="d-flex align-items-center justify-content-between">
+              <div class="d-flex align-items-center gap-3">
+                <div class="student-initial">{{ s.name[0] }}</div>
+                <div>
+                  <h6 class="mb-0 fw-bold small">{{ s.name }}</h6>
+                  <small class="text-muted smaller">{{ s.nis }} • {{ s.class || 'XII RPL' }}</small>
+                </div>
+              </div>
+              <span :class="['status-tag', s.status ? 'tag-hadir' : 'tag-pending']">
+                <i :class="s.status ? 'bi bi-check-circle-fill' : 'bi bi-clock'"></i>
+                {{ s.status || 'Belum' }}
+              </span>
+            </div>
+            
+            <div v-if="s.status" class="mt-2 pt-2 border-top-dashed d-flex justify-content-between align-items-center">
+               <button @click="toggleHistory(s.nis)" class="btn-detail">
+                 {{ showHistoryFor === s.nis ? 'Sembunyikan' : 'Lihat Detail Waktu' }}
+               </button>
+               <small v-if="showHistoryFor === s.nis" class="text-primary fw-bold smaller">
+                 <i class="bi bi-stopwatch me-1"></i>07:15 WIB
+               </small>
+            </div>
+          </div>
+        </TransitionGroup>
+
+        <div v-if="filteredStudents.length === 0" class="text-center py-5">
+          <i class="bi bi-folder2-open display-4 text-muted mb-2"></i>
+          <p class="text-muted small">Data tidak ditemukan</p>
+        </div>
+      </div>
+    </section>
+
+    <button @click="resetAllAttendance" class="btn-reset-data">
+      <i class="bi bi-trash3 me-2"></i> Reset Kehadiran Hari Ini
+    </button>
+  </main>
+
+  <Transition name="sheet">
+    <div v-if="showQrModal" class="sheet-overlay" @click.self="showQrModal=false">
+      <div class="sheet-content">
+        <div class="drag-handle mb-4"></div>
+        <div class="text-center mb-4">
+          <h5 class="fw-bold mb-1">QR Code Presensi</h5>
+          <p class="text-muted small">Berlaku untuk mata pelajaran saat ini</p>
+        </div>
+        
+        <div class="qr-display-area shadow-sm">
+          <img :src="guruQr" class="img-fluid rounded-3" alt="QR Code" />
+          <div class="qr-progress-bar">
+            <div class="bar-fill"></div>
+          </div>
+        </div>
+
+        <div class="mt-4 p-3 bg-light rounded-3 text-center">
+          <small class="text-muted d-block mb-1">Status Sinyal QR</small>
+          <span class="badge bg-success-subtle text-success border border-success-subtle">
+            <i class="bi bi-broadcast me-1"></i> Terhubung & Aktif
+          </span>
+        </div>
+        
+        <button @click="showQrModal=false" class="btn btn-dark w-100 rounded-pill py-3 mt-4 fw-bold">
+          Selesai / Tutup
+        </button>
+      </div>
+    </div>
+  </Transition>
+</div>
 </template>
 
 <style scoped>
-/* CSS VARIABLES & BASE */
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap');
+
 .app-container {
-  --bg-main: #f8fafc;
-  --bg-card: #ffffff;
-  --text-bold: #0f172a;
-  --text-muted: #64748b;
-  --primary: #4f46e5;
-  --light-gray: #f1f5f9;
   font-family: 'Plus Jakarta Sans', sans-serif;
   min-height: 100vh;
-  max-width: 480px;
-  margin: 0 auto;
-  transition: 0.3s;
-  background: var(--bg-main);
+  transition: background 0.3s;
 }
 
-.dark-mode {
-  --bg-main: #020617;
-  --bg-card: #1e293b;
-  --text-bold: #f8fafc;
-  --text-muted: #94a3b8;
-  --light-gray: #334155;
+.light-theme { background-color: #f8fafc; color: #1e293b; }
+.dark-theme { background-color: #0f172a; color: #f1f5f9; }
+
+/* NAVBAR */
+.teacher-nav {
+  height: 70px;
+  background: rgba(255,255,255,0.8);
+  backdrop-filter: blur(10px);
+  position: sticky; top: 0; z-index: 100;
+  border-bottom: 1px solid rgba(0,0,0,0.05);
+}
+.dark-theme .teacher-nav { background: rgba(30, 41, 59, 0.8); border-color: rgba(255,255,255,0.05); }
+
+.nav-content-web {
+  max-width: 600px; margin: 0 auto;
+  height: 100%; display: flex; align-items: center; justify-content: space-between;
 }
 
-.bg-card { background: var(--bg-card) !important; }
-.title-text { color: var(--text-bold) !important; }
-
-/* HEADER */
-.avatar-circle {
-  width: 42px; height: 42px;
-  background: linear-gradient(135deg, #6366f1, #4f46e5);
-  color: white; border-radius: 12px;
-  display: flex; align-items: center; justify-content: center;
-  font-weight: 800; font-size: 1.1rem;
+.teacher-avatar {
+  width: 40px; height: 40px; border-radius: 12px;
+  background: linear-gradient(135deg, #6366f1, #4338ca);
+  color: white; display: flex; align-items: center; justify-content: center; font-weight: 800;
 }
-.app-header { background: var(--bg-card); position: sticky; top: 0; z-index: 100; }
 
-/* HERO CARD */
-.hero-card {
-  border: none; border-radius: 28px;
-  background: linear-gradient(135deg, #1e293b, #0f172a);
-  box-shadow: 0 15px 35px -5px rgba(0,0,0,0.2);
+.icon-btn {
+  width: 38px; height: 38px; border-radius: 50%; border: none;
+  background: #f1f5f9; display: flex; align-items: center; justify-content: center;
+  transition: 0.2s;
 }
-.icon-glow { filter: drop-shadow(0 0 8px rgba(255,255,255,0.4)); }
+.dark-theme .icon-btn { background: #1e293b; color: white; }
 
-/* ACTION CARD */
-.action-card {
-  background: var(--bg-card); border-radius: 20px;
-  border: 1px solid rgba(0,0,0,0.05) !important;
+/* HERO */
+.dashboard-hero {
+  background: linear-gradient(135deg, #1e293b 0%, #334155 100%);
+  border-radius: 24px;
+  overflow: hidden;
+  position: relative;
 }
-.icon-box-qr {
-  width: 50px; height: 50px; border-radius: 15px;
+.stat-card-inner {
+  background: rgba(255,255,255,0.1);
+  backdrop-filter: blur(5px);
+  border-radius: 18px;
+  padding: 15px;
+  text-align: center;
+}
+
+/* QR TRIGGER */
+.qr-trigger-card {
+  background: white;
+  border-radius: 20px;
+  transition: transform 0.2s;
+}
+.dark-theme .qr-trigger-card { background: #1e293b; }
+.qr-trigger-card:active { transform: scale(0.98); }
+.qr-icon-box {
+  width: 54px; height: 54px; border-radius: 15px;
   background: #eef2ff; display: flex; align-items: center; justify-content: center;
 }
 
-/* TABS */
-.tab-switcher { background: var(--light-gray); border-radius: 15px; display: flex; }
-.tab-switcher button {
-  flex: 1; border: none; background: none; padding: 10px;
-  border-radius: 12px; font-weight: 700; font-size: 0.8rem;
-  color: var(--text-muted); transition: 0.3s;
+/* TABS & SEARCH */
+.tab-pill-container {
+  display: flex; gap: 5px; background: #f1f5f9; padding: 5px; border-radius: 12px;
 }
-.tab-switcher button.active {
-  background: var(--bg-card); color: var(--primary);
-  box-shadow: 0 4px 10px rgba(0,0,0,0.05);
+.dark-theme .tab-pill-container { background: #0f172a; }
+.tab-pill-container button {
+  flex: 1; border: none; padding: 8px; border-radius: 8px;
+  font-size: 0.8rem; font-weight: 700; background: transparent; color: #64748b;
+}
+.tab-pill-container button.active { background: white; color: #6366f1; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
+.dark-theme .tab-pill-container button.active { background: #1e293b; color: white; }
+
+.search-input-group {
+  position: relative; display: flex; align-items: center;
+}
+.search-input-group i { position: absolute; left: 12px; color: #94a3b8; }
+.search-input-group input {
+  width: 100%; border: 1px solid #e2e8f0; border-radius: 12px;
+  padding: 10px 10px 10px 40px; font-size: 0.85rem; outline: none;
+}
+.dark-theme .search-input-group input { background: #0f172a; border-color: #334155; color: white; }
+
+/* LIST ITEM */
+.student-item-row { border-bottom: 1px solid #f1f5f9; }
+.dark-theme .student-item-row { border-color: rgba(255,255,255,0.05); }
+.student-initial {
+  width: 36px; height: 36px; border-radius: 50%; background: #f8fafc;
+  display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 0.8rem;
+}
+.dark-theme .student-initial { background: #0f172a; }
+
+.status-tag {
+  font-size: 0.65rem; font-weight: 800; padding: 4px 10px; border-radius: 8px;
+  display: flex; align-items: center; gap: 5px;
+}
+.tag-hadir { background: #dcfce7; color: #15803d; }
+.tag-pending { background: #f1f5f9; color: #94a3b8; }
+
+.btn-detail {
+  background: none; border: none; color: #6366f1; font-size: 0.7rem; font-weight: 700; padding: 0;
 }
 
-/* SEARCH */
-.search-box-wrapper { position: relative; }
-.search-icon { position: absolute; left: 18px; top: 13px; opacity: 0.4; }
-.search-box-wrapper input { background: var(--bg-card); border-radius: 15px; }
+.border-top-dashed { border-top: 1px dashed #e2e8f0; }
 
-/* STUDENT CARDS */
-.s-avatar-box {
-  width: 44px; height: 44px; border-radius: 14px;
-  background: var(--light-gray); color: var(--primary);
-  display: flex; align-items: center; justify-content: center; font-weight: 800;
-}
-.badge-ui {
-  font-size: 0.7rem; font-weight: 800; padding: 5px 12px; border-radius: 8px;
-  text-transform: uppercase;
-}
-.badge-ui.Hadir { background: #dcfce7; color: #15803d; }
-.badge-ui.None { background: #f1f5f9; color: #64748b; }
-
-.history-content { background: var(--light-gray); }
-
-/* RESET BUTTON */
-.btn-reset-custom {
-  background: none; border: 2px dashed #f43f5e; color: #f43f5e;
-  font-weight: 800; transition: 0.3s;
-}
-.btn-reset-custom:hover { background: #fff1f2; }
-
-/* MODAL BOTTOM SHEET */
-.modal-overlay {
+/* MODAL / SHEET */
+.sheet-overlay {
   position: fixed; inset: 0; background: rgba(0,0,0,0.5);
   backdrop-filter: blur(4px); z-index: 2000; display: flex; align-items: flex-end;
 }
-.bottom-sheet { animation: slideUp 0.4s ease-out; }
-.drag-handle { width: 40px; height: 5px; background: #cbd5e1; border-radius: 10px; }
-.qr-wrapper-box { width: 250px; border-radius: 20px; }
-.qr-progress-bar { height: 4px; background: #e0e7ff; border-radius: 10px; overflow: hidden; }
-.qr-progress-fill {
-  height: 100%; background: var(--primary); width: 100%;
-  animation: loadingBar 20s linear infinite;
+.sheet-content {
+  background: white; width: 100%; border-radius: 30px 30px 0 0;
+  padding: 25px; animation: slideUp 0.4s ease-out;
+}
+.dark-theme .sheet-content { background: #1e293b; }
+.drag-handle { width: 40px; height: 5px; background: #e2e8f0; border-radius: 5px; margin: 0 auto; }
+
+.qr-display-area {
+  background: white; padding: 25px; border-radius: 24px; text-align: center;
+}
+.qr-progress-bar {
+  height: 4px; background: #f1f5f9; border-radius: 2px; margin-top: 20px; overflow: hidden;
+}
+.bar-fill {
+  height: 100%; background: #6366f1; width: 100%;
+  animation: qrTimer 20s linear infinite;
 }
 
-/* ANIMATIONS */
-@keyframes loadingBar { from { width: 100%; } to { width: 0%; } }
-@keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
-
-.list-enter-active, .list-leave-active { transition: all 0.4s ease; }
-.list-enter-from, .list-leave-to { opacity: 0; transform: translateX(-20px); }
-
-.pop-enter-active { transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
-.pop-enter-from { transform: scale(0.8); opacity: 0; }
-
+/* TOAST */
 .custom-toast {
   position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
-  z-index: 9999; padding: 12px 25px; border-radius: 50px;
-  color: white; display: flex; align-items: center; gap: 10px;
-  box-shadow: 0 10px 25px rgba(0,0,0,0.2);
+  z-index: 3000; padding: 12px 24px; border-radius: 16px; color: white;
+  font-weight: 600; box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+  display: flex; align-items: center; gap: 10px;
 }
-.custom-toast.success { background: #10b981; }
-.custom-toast.error { background: #ef4444; }
+.custom-toast.success { background: #1e293b; }
 
-.btn-theme { background: var(--light-gray); width: 38px; height: 38px; }
+.btn-reset-data {
+  width: 100%; border: 1.5px dashed #ef4444; color: #ef4444;
+  background: transparent; border-radius: 15px; padding: 12px; font-weight: 700;
+  font-size: 0.8rem; transition: 0.2s;
+}
+.btn-reset-data:hover { background: rgba(239, 68, 68, 0.05); }
 
-/* Transitions for history expansion */
-.expand-enter-active, .expand-leave-active { transition: all 0.3s ease; max-height: 200px; overflow: hidden; }
-.expand-enter-from, .expand-leave-to { max-height: 0; opacity: 0; padding-top: 0 !important; padding-bottom: 0 !important; }
+@keyframes qrTimer { from { width: 100%; } to { width: 0%; } }
+@keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+
+.smaller { font-size: 0.7rem; }
 </style>
