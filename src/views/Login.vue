@@ -95,7 +95,7 @@ import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import axios from 'axios'
 
-const backendUrl = 'https://backend-deployys-kotc.vercel.app'
+const backendUrl = 'https://backend-deployys-3jtk.vercel.app'
 const router = useRouter()
 
 const username = ref('')
